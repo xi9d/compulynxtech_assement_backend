@@ -1,0 +1,366 @@
+package com.xi9d.compulynx.service;
+
+import com.itextpdf.text.*;
+import com.itextpdf.text.pdf.PdfPCell;
+import com.itextpdf.text.pdf.PdfPTable;
+import com.itextpdf.text.pdf.PdfWriter;
+import com.opencsv.CSVReader;
+import com.opencsv.CSVWriter;
+import com.xi9d.compulynx.entity.Student;
+import com.xi9d.compulynx.repository.StudentRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.util.*;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class DataService {
+    
+    private final StudentRepository studentRepository;
+    
+    private static final String[] CLASS_OPTIONS = {"Class1", "Class2", "Class3", "Class4", "Class5"};
+    private static final String WINDOWS_BASE_PATH = "C:\\var\\log\\applications\\API\\dataprocessing\\";
+    private static final String LINUX_BASE_PATH = "/var/log/applications/API/dataprocessing/";
+    
+    public String generateExcelFile(int recordCount) throws IOException {
+        String fileName = "students_" + System.currentTimeMillis() + ".xlsx";
+        String filePath = getFilePath(fileName);
+        
+        // Create directories if they don't exist
+        Path path = Paths.get(filePath).getParent();
+        Files.createDirectories(path);
+        
+        try (Workbook workbook = new XSSFWorkbook();
+             FileOutputStream fileOut = new FileOutputStream(filePath)) {
+            
+            Sheet sheet = workbook.createSheet("Students");
+            
+            // Create header style once
+            CellStyle headerStyle = workbook.createCellStyle();
+            org.apache.poi.ss.usermodel.Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            
+            // Create header row
+            Row headerRow = sheet.createRow(0);
+            String[] headers = {"studentId", "firstName", "lastName", "DOB", "class", "score"};
+            
+            for (int i = 0; i < headers.length; i++) {
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+            }
+            
+            // Create data rows
+            for (int i = 1; i <= recordCount; i++) {
+                Row row = sheet.createRow(i);
+                
+                row.createCell(0).setCellValue(i); // studentId
+                row.createCell(1).setCellValue(generateRandomString(3, 8)); // firstName
+                row.createCell(2).setCellValue(generateRandomString(3, 8)); // lastName
+                row.createCell(3).setCellValue(generateRandomDate().toString()); // DOB
+                row.createCell(4).setCellValue(CLASS_OPTIONS[ThreadLocalRandom.current().nextInt(CLASS_OPTIONS.length)]); // class
+                row.createCell(5).setCellValue(ThreadLocalRandom.current().nextInt(55, 76)); // score
+                
+                if (i % 10000 == 0) {
+                    log.info("Generated {} records", i);
+                }
+            }
+            
+            // Auto-size columns
+            for (int i = 0; i < headers.length; i++) {
+                sheet.autoSizeColumn(i);
+            }
+            
+            workbook.write(fileOut);
+        }
+        
+        log.info("Excel file generated successfully: {}", filePath);
+        return fileName;
+    }
+    
+    public String processExcelToCsv(MultipartFile file) throws IOException {
+        String csvFileName = "processed_" + System.currentTimeMillis() + ".csv";
+        String csvFilePath = getFilePath(csvFileName);
+        
+        try (InputStream inputStream = file.getInputStream();
+             Workbook workbook = new XSSFWorkbook(inputStream);
+             FileWriter writer = new FileWriter(csvFilePath);
+             CSVWriter csvWriter = new CSVWriter(writer)) {
+            
+            Sheet sheet = workbook.getSheetAt(0);
+            
+            // Write header
+            Row headerRow = sheet.getRow(0);
+            String[] headers = new String[headerRow.getLastCellNum()];
+            for (int i = 0; i < headerRow.getLastCellNum(); i++) {
+                headers[i] = getCellValueAsString(headerRow.getCell(i));
+            }
+            csvWriter.writeNext(headers);
+            
+            // Process data rows
+            for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null) continue;
+                
+                String[] rowData = new String[headers.length];
+                for (int cellIndex = 0; cellIndex < headers.length; cellIndex++) {
+                    Cell cell = row.getCell(cellIndex);
+                    String cellValue = getCellValueAsString(cell);
+                    
+                    // Add 10 to score (assuming score is in column 5)
+                    if (cellIndex == 5 && cellValue != null && !cellValue.isEmpty()) {
+                        try {
+                            int score = Integer.parseInt(cellValue);
+                            rowData[cellIndex] = String.valueOf(score + 10);
+                        } catch (NumberFormatException e) {
+                            rowData[cellIndex] = cellValue;
+                        }
+                    } else {
+                        rowData[cellIndex] = cellValue;
+                    }
+                }
+                csvWriter.writeNext(rowData);
+                
+                if (rowIndex % 10000 == 0) {
+                    log.info("Processed {} rows to CSV", rowIndex);
+                }
+            }
+        }
+        
+        log.info("CSV file processed successfully: {}", csvFilePath);
+        return csvFileName;
+    }
+    
+    // public void uploadCsvToDatabase(MultipartFile file) throws IOException {
+    //     try (InputStream inputStream = file.getInputStream();
+    //          InputStreamReader reader = new InputStreamReader(inputStream);
+    //          CSVReader csvReader = new CSVReader(reader)) {
+            
+    //         List<String[]> records = csvReader.readAll();
+    //         List<Student> students = new ArrayList<>();
+            
+    //         // Skip header row
+    //         for (int i = 1; i < records.size(); i++) {
+    //             String[] record = records.get(i);
+    //             if (record.length >= 6) {
+    //                 try {
+    //                     Long studentId = Long.parseLong(record[0]);
+    //                     String firstName = record[1];
+    //                     String lastName = record[2];
+    //                     LocalDate dob = LocalDate.parse(record[3]);
+    //                     String className = record[4];
+    //                     Integer score = Integer.parseInt(record[5]) + 5; // Add 5 to score
+                        
+    //                     students.add(new Student(studentId, firstName, lastName, dob, className, score));
+                        
+    //                     if (students.size() >= 1000) {
+    //                         studentRepository.saveAll(students);
+    //                         students.clear();
+    //                         log.info("Saved batch of 1000 students to database");
+    //                     }
+    //                 } catch (Exception e) {
+    //                     log.warn("Error processing record {}: {}", i, e.getMessage());
+    //                 }
+    //             }
+    //         }
+            
+    //         // Save remaining students
+    //         if (!students.isEmpty()) {
+    //             studentRepository.saveAll(students);
+    //         }
+    //     }
+        
+    //     log.info("CSV data uploaded to database successfully");
+    // }
+    
+    public Page<Student> getStudentsWithFilters(Long studentId, String className, Pageable pageable) {
+        return studentRepository.findStudentsWithFilters(studentId, className, pageable);
+    }
+    
+    public List<Student> getAllStudents() {
+        return studentRepository.findAllByOrderByStudentIdAsc();
+    }
+    
+    public List<Student> getStudentsByClass(String className) {
+        if (className == null || className.isEmpty()) {
+            return getAllStudents();
+        }
+        return studentRepository.findByClassNameOrderByStudentIdAsc(className);
+    }
+    
+    public byte[] exportToExcel(List<Student> students) throws IOException {
+        try (Workbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            
+            Sheet sheet = workbook.createSheet("Students Report");
+            
+            // Create header style
+            CellStyle headerStyle = workbook.createCellStyle();
+            org.apache.poi.ss.usermodel.Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            
+            // Create header
+            Row headerRow = sheet.createRow(0);
+            String[] headers = {"Student ID", "First Name", "Last Name", "DOB", "Class", "Score"};
+            for (int i = 0; i < headers.length; i++) {
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+            }
+            
+            // Create data rows
+            for (int i = 0; i < students.size(); i++) {
+                Student student = students.get(i);
+                Row row = sheet.createRow(i + 1);
+                row.createCell(0).setCellValue(student.getStudentId());
+                row.createCell(1).setCellValue(student.getFirstName());
+                row.createCell(2).setCellValue(student.getLastName());
+                row.createCell(3).setCellValue(student.getDob().toString());
+                row.createCell(4).setCellValue(student.getClassName());
+                row.createCell(5).setCellValue(student.getScore());
+            }
+            
+            // Auto-size columns
+            for (int i = 0; i < headers.length; i++) {
+                sheet.autoSizeColumn(i);
+            }
+            
+            workbook.write(outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+    
+    public byte[] exportToCsv(List<Student> students) throws IOException {
+        try (StringWriter writer = new StringWriter();
+             CSVWriter csvWriter = new CSVWriter(writer)) {
+            
+            // Write header
+            String[] headers = {"Student ID", "First Name", "Last Name", "DOB", "Class", "Score"};
+            csvWriter.writeNext(headers);
+            
+            // Write data
+            for (Student student : students) {
+                String[] data = {
+                    student.getStudentId().toString(),
+                    student.getFirstName(),
+                    student.getLastName(),
+                    student.getDob().toString(),
+                    student.getClassName(),
+                    student.getScore().toString()
+                };
+                csvWriter.writeNext(data);
+            }
+            
+            return writer.toString().getBytes();
+        }
+    }
+    
+    // public byte[] exportToPdf(List<Student> students) throws DocumentException {
+    //     Document document = new Document();
+    //     try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+    //         PdfWriter.getInstance(document, outputStream);
+    //         document.open();
+            
+    //         // Add title
+    //         com.itextpdf.text.Font titleFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18);
+    //         Paragraph title = new Paragraph("Student Report", titleFont);
+    //         title.setAlignment(Element.ALIGN_CENTER);
+    //         document.add(title);
+    //         document.add(new Paragraph("\n"));
+            
+    //         // Create table
+    //         PdfPTable table = new PdfPTable(6);
+    //         table.setWidthPercentage(100);
+            
+    //         // Add headers
+    //         String[] headers = {"Student ID", "First Name", "Last Name", "DOB", "Class", "Score"};
+    //         com.itextpdf.text.Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD);
+    //         for (String header : headers) {
+    //             PdfPCell cell = new PdfPCell(new Phrase(header, headerFont));
+    //             cell.setHorizontalAlignment(Element.ALIGN_CENTER);
+    //             table.addCell(cell);
+    //         }
+            
+    //         // Add data
+    //         for (Student student : students) {
+    //             table.addCell(student.getStudentId().toString());
+    //             table.addCell(student.getFirstName());
+    //             table.addCell(student.getLastName());
+    //             table.addCell(student.getDob().toString());
+    //             table.addCell(student.getClassName());
+    //             table.addCell(student.getScore().toString());
+    //         }
+            
+    //         document.add(table);
+    //         document.close();
+            
+    //         return outputStream.toByteArray();
+    //     }
+    // }
+    
+    private String generateRandomString(int minLength, int maxLength) {
+        int length = ThreadLocalRandom.current().nextInt(minLength, maxLength + 1);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < length; i++) {
+            char c = (char) (ThreadLocalRandom.current().nextInt(26) + 'a');
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+    
+    private LocalDate generateRandomDate() {
+        LocalDate start = LocalDate.of(2000, 1, 1);
+        LocalDate end = LocalDate.of(2010, 12, 31);
+        long startEpochDay = start.toEpochDay();
+        long endEpochDay = end.toEpochDay();
+        long randomDay = ThreadLocalRandom.current().nextLong(startEpochDay, endEpochDay + 1);
+        return LocalDate.ofEpochDay(randomDay);
+    }
+    
+    private String getFilePath(String fileName) {
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            return WINDOWS_BASE_PATH + fileName;
+        } else {
+            return LINUX_BASE_PATH + fileName;
+        }
+    }
+    
+    private String getCellValueAsString(Cell cell) {
+        if (cell == null) return "";
+        
+        switch (cell.getCellType()) {
+            case STRING:
+                return cell.getStringCellValue();
+            case NUMERIC:
+                if (DateUtil.isCellDateFormatted(cell)) {
+                    return cell.getLocalDateTimeCellValue().toLocalDate().toString();
+                } else {
+                    return String.valueOf((long) cell.getNumericCellValue());
+                }
+            case BOOLEAN:
+                return String.valueOf(cell.getBooleanCellValue());
+            case FORMULA:
+                return cell.getCellFormula();
+            default:
+                return "";
+        }
+    }
+}
