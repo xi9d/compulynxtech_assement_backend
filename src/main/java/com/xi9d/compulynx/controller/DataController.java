@@ -20,7 +20,10 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/data")
-@CrossOrigin(origins = "*")
+@CrossOrigin(
+    origins = "http://localhost:4200",
+    allowCredentials = "true"
+)
 @RequiredArgsConstructor
 @Slf4j
 public class DataController {
@@ -78,7 +81,7 @@ public class DataController {
                 return ResponseEntity.badRequest().body(response);
             }
             
-            // dataService.uploadCsvToDatabase(file);
+            dataService.uploadCsvToDatabase(file);
             response.put("success", true);
             response.put("message", "CSV data uploaded to database successfully");
             return ResponseEntity.ok(response);
@@ -143,7 +146,7 @@ public class DataController {
                     headers.setContentDispositionFormData("attachment", "students_report.csv");
                     break;
                 case "pdf":
-                    // data = dataService.exportToPdf(students);
+                    data = dataService.exportToPdf(students);
                     headers.setContentType(MediaType.APPLICATION_PDF);
                     headers.setContentDispositionFormData("attachment", "students_report.pdf");
                     break;
@@ -151,7 +154,7 @@ public class DataController {
                     return ResponseEntity.badRequest().build();
             }
             TODO : //remember to add data as a parameter
-            return new ResponseEntity<>( headers, HttpStatus.OK);
+            return new ResponseEntity<>( data, headers, HttpStatus.OK);
         } catch (Exception e) {
             log.error("Error exporting students", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();

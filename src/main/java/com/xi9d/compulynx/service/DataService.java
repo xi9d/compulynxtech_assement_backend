@@ -8,6 +8,8 @@ import com.opencsv.CSVReader;
 import com.opencsv.CSVWriter;
 import com.xi9d.compulynx.entity.Student;
 import com.xi9d.compulynx.repository.StudentRepository;
+
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
@@ -26,6 +28,14 @@ import java.util.*;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
+
+import com.itextpdf.text.Document;
+import com.itextpdf.text.DocumentException;
+import com.itextpdf.text.Element;
+import com.itextpdf.text.Font;
+import com.itextpdf.text.FontFactory;
+import com.itextpdf.text.Paragraph;
+import com.itextpdf.text.Phrase;
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -146,49 +156,102 @@ public class DataService {
         log.info("CSV file processed successfully: {}", csvFilePath);
         return csvFileName;
     }
+   @Transactional
+public void uploadCsvToDatabase(MultipartFile file) throws IOException {
+    log.info("Starting CSV upload process. File: {}, Size: {} bytes", file.getOriginalFilename(), file.getSize());
     
-    // public void uploadCsvToDatabase(MultipartFile file) throws IOException {
-    //     try (InputStream inputStream = file.getInputStream();
-    //          InputStreamReader reader = new InputStreamReader(inputStream);
-    //          CSVReader csvReader = new CSVReader(reader)) {
-            
-    //         List<String[]> records = csvReader.readAll();
-    //         List<Student> students = new ArrayList<>();
-            
-    //         // Skip header row
-    //         for (int i = 1; i < records.size(); i++) {
-    //             String[] record = records.get(i);
-    //             if (record.length >= 6) {
-    //                 try {
-    //                     Long studentId = Long.parseLong(record[0]);
-    //                     String firstName = record[1];
-    //                     String lastName = record[2];
-    //                     LocalDate dob = LocalDate.parse(record[3]);
-    //                     String className = record[4];
-    //                     Integer score = Integer.parseInt(record[5]) + 5; // Add 5 to score
-                        
-    //                     students.add(new Student(studentId, firstName, lastName, dob, className, score));
-                        
-    //                     if (students.size() >= 1000) {
-    //                         studentRepository.saveAll(students);
-    //                         students.clear();
-    //                         log.info("Saved batch of 1000 students to database");
-    //                     }
-    //                 } catch (Exception e) {
-    //                     log.warn("Error processing record {}: {}", i, e.getMessage());
-    //                 }
-    //             }
-    //         }
-            
-    //         // Save remaining students
-    //         if (!students.isEmpty()) {
-    //             studentRepository.saveAll(students);
-    //         }
-    //     }
+    try (InputStream inputStream = file.getInputStream();
+         InputStreamReader reader = new InputStreamReader(inputStream);
+         CSVReader csvReader = new CSVReader(reader)) {
         
-    //     log.info("CSV data uploaded to database successfully");
-    // }
+        List<Student> students = new ArrayList<>();
+        String[] record;
+        int recordCount = 0;
+        int successfulRecords = 0;
+        boolean isFirstRow = true;
+        
+        // Read records one by one instead of loading all into memory
+        while ((record = csvReader.readNext()) != null) {
+            // Skip header row
+            if (isFirstRow) {
+                isFirstRow = false;
+                log.info("Header row: {}", Arrays.toString(record));
+                continue;
+            }
+            
+            recordCount++;
+            log.debug("Processing record {}: {}", recordCount, Arrays.toString(record));
+            
+            if (record.length >= 6) {
+                try {
+                    Long studentId = Long.parseLong(record[0].trim());
+                    String firstName = record[1].trim();
+                    String lastName = record[2].trim();
+                    LocalDate dob = LocalDate.parse(record[3].trim());
+                    String className = record[4].trim();
+                    Integer score = Integer.parseInt(record[5].trim()) + 5; // Add 5 to score
+                    
+                    // Debug log for first few records
+                    if (recordCount <= 5) {
+                        log.info("Parsed record {}: ID={}, Name={} {}, DOB={}, Class={}, Score={}", 
+                               recordCount, studentId, firstName, lastName, dob, className, score);
+                    }
+                    
+                    // Create student object - check if constructor exists
+                    Student student = new Student();
+                    student.setStudentId(studentId);
+                    student.setFirstName(firstName);
+                    student.setLastName(lastName);
+                    student.setDob(dob);
+                    student.setClassName(className);
+                    student.setScore(score);
+                    
+                    students.add(student);
+                    successfulRecords++;
+                    
+                    // Save in batches to avoid memory issues
+                    if (students.size() >= 1000) {
+                        try {
+                            studentRepository.saveAll(students);
+                            log.info("Saved batch of 1000 students to database. Total processed: {}", recordCount);
+                            students.clear();
+                        } catch (Exception e) {
+                            log.error("Error saving batch to database: {}", e.getMessage(), e);
+                            throw e; // Re-throw to stop processing
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    log.warn("Error parsing numbers in record {}: {} - Record: {}", recordCount, e.getMessage(), Arrays.toString(record));
+                } catch (java.time.format.DateTimeParseException e) {
+                    log.warn("Error parsing date in record {}: {} - Record: {}", recordCount, e.getMessage(), Arrays.toString(record));
+                } catch (Exception e) {
+                    log.error("Unexpected error processing record {}: {} - Record: {}", recordCount, e.getMessage(), Arrays.toString(record), e);
+                }
+            } else {
+                log.warn("Record {} has insufficient columns ({}), expected 6 - Record: {}", 
+                        recordCount, record.length, Arrays.toString(record));
+            }
+        }
+        
+        // Save remaining students
+        if (!students.isEmpty()) {
+            try {
+                studentRepository.saveAll(students);
+                log.info("Saved final batch of {} students to database", students.size());
+            } catch (Exception e) {
+                log.error("Error saving final batch to database: {}", e.getMessage(), e);
+                throw e;
+            }
+        }
+        
+        log.info("CSV data uploaded to database successfully. Total records processed: {}, Successful: {}", 
+                recordCount, successfulRecords);
+                
+    } catch (Exception e) {
+        log.error("Error during CSV upload process: {}", e.getMessage(), e);
     
+    }
+}
     public Page<Student> getStudentsWithFilters(Long studentId, String className, Pageable pageable) {
         return studentRepository.findStudentsWithFilters(studentId, className, pageable);
     }
@@ -272,48 +335,48 @@ public class DataService {
         }
     }
     
-    // public byte[] exportToPdf(List<Student> students) throws DocumentException {
-    //     Document document = new Document();
-    //     try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-    //         PdfWriter.getInstance(document, outputStream);
-    //         document.open();
-            
-    //         // Add title
-    //         com.itextpdf.text.Font titleFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18);
-    //         Paragraph title = new Paragraph("Student Report", titleFont);
-    //         title.setAlignment(Element.ALIGN_CENTER);
-    //         document.add(title);
-    //         document.add(new Paragraph("\n"));
-            
-    //         // Create table
-    //         PdfPTable table = new PdfPTable(6);
-    //         table.setWidthPercentage(100);
-            
-    //         // Add headers
-    //         String[] headers = {"Student ID", "First Name", "Last Name", "DOB", "Class", "Score"};
-    //         com.itextpdf.text.Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD);
-    //         for (String header : headers) {
-    //             PdfPCell cell = new PdfPCell(new Phrase(header, headerFont));
-    //             cell.setHorizontalAlignment(Element.ALIGN_CENTER);
-    //             table.addCell(cell);
-    //         }
-            
-    //         // Add data
-    //         for (Student student : students) {
-    //             table.addCell(student.getStudentId().toString());
-    //             table.addCell(student.getFirstName());
-    //             table.addCell(student.getLastName());
-    //             table.addCell(student.getDob().toString());
-    //             table.addCell(student.getClassName());
-    //             table.addCell(student.getScore().toString());
-    //         }
-            
-    //         document.add(table);
-    //         document.close();
-            
-    //         return outputStream.toByteArray();
-    //     }
-    // }
+    public byte[] exportToPdf(List<Student> students) throws DocumentException, IOException {
+    Document document = new Document();
+    try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+        PdfWriter.getInstance(document, outputStream);
+        document.open();
+        
+        // Add title
+        Font titleFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18);
+        Paragraph title = new Paragraph("Student Report", titleFont);
+        title.setAlignment(Element.ALIGN_CENTER);
+        document.add(title);
+        document.add(new Paragraph("\n"));
+        
+        // Create table
+        PdfPTable table = new PdfPTable(6);
+        table.setWidthPercentage(100);
+        
+        // Add headers
+        String[] headers = {"Student ID", "First Name", "Last Name", "DOB", "Class", "Score"};
+        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD);
+        for (String header : headers) {
+            PdfPCell cell = new PdfPCell(new Phrase(header, headerFont));
+            cell.setHorizontalAlignment(Element.ALIGN_CENTER);
+            table.addCell(cell);
+        }
+        
+        // Add data
+        for (Student student : students) {
+            table.addCell(student.getStudentId().toString());
+            table.addCell(student.getFirstName());
+            table.addCell(student.getLastName());
+            table.addCell(student.getDob().toString());
+            table.addCell(student.getClassName());
+            table.addCell(student.getScore().toString());
+        }
+        
+        document.add(table);
+        document.close();
+        
+        return outputStream.toByteArray();
+    }
+}
     
     private String generateRandomString(int minLength, int maxLength) {
         int length = ThreadLocalRandom.current().nextInt(minLength, maxLength + 1);
