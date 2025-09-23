@@ -6,6 +6,7 @@ import com.itextpdf.text.pdf.PdfPTable;
 import com.itextpdf.text.pdf.PdfWriter;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVWriter;
+import com.opencsv.exceptions.CsvValidationException;
 import com.xi9d.compulynx.entity.Student;
 import com.xi9d.compulynx.repository.StudentRepository;
 
@@ -106,7 +107,104 @@ public class DataService {
         log.info("Excel file generated successfully: {}", filePath);
         return fileName;
     }
+    public List<Student> getAllStudentsFromCsv() {
+    List<Student> students = new ArrayList<>();
     
+    // Look for the most recent CSV file in the logs directory
+    String csvFilePath = findMostRecentCsvFile();
+    
+    if (csvFilePath == null) {
+        log.warn("No CSV file found in logs directory");
+        return students; // Return empty list
+    }
+    
+    try (FileReader fileReader = new FileReader(csvFilePath);
+         CSVReader csvReader = new CSVReader(fileReader)) {
+        
+        String[] record;
+        boolean isFirstRow = true;
+        int recordCount = 0;
+        
+        try {
+            while ((record = csvReader.readNext()) != null) {
+                // Skip header row
+                if (isFirstRow) {
+                    isFirstRow = false;
+                    log.info("Reading from CSV file: {}, Header: {}", csvFilePath, Arrays.toString(record));
+                    continue;
+                }
+                
+                recordCount++;
+                
+                if (record.length >= 6) {
+                    try {
+                        Long studentId = Long.parseLong(record[0].trim());
+                        String firstName = record[1].trim();
+                        String lastName = record[2].trim();
+                        LocalDate dob = LocalDate.parse(record[3].trim());
+                        String className = record[4].trim();
+                        Integer score = Integer.parseInt(record[5].trim());
+                        
+                        Student student = new Student(studentId, firstName, lastName, dob, className, score);
+                        students.add(student);
+                        
+                    } catch (Exception e) {
+                        log.warn("Error parsing record {}: {} - Record: {}", recordCount, e.getMessage(), Arrays.toString(record));
+                    }
+                }
+            }
+        } catch (CsvValidationException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        
+        log.info("Successfully read {} students from CSV file: {}", students.size(), csvFilePath);
+        
+    } catch (IOException e) {
+        log.error("Error reading CSV file: {}", e.getMessage(), e);
+    }
+    
+    // Sort by studentId to maintain consistent ordering
+    students.sort((s1, s2) -> Long.compare(s1.getStudentId(), s2.getStudentId()));
+    
+    return students;
+}
+
+private String findMostRecentCsvFile() {
+    try {
+        Path logsDir = Paths.get(LOCAL_BASE_PATH);
+        
+        if (!Files.exists(logsDir)) {
+            log.warn("Logs directory does not exist: {}", logsDir);
+            return null;
+        }
+        
+        // Find all CSV files and get the most recent one
+        Optional<Path> mostRecentFile = Files.list(logsDir)
+                .filter(path -> path.toString().toLowerCase().endsWith(".csv"))
+                .max((path1, path2) -> {
+                    try {
+                        return Files.getLastModifiedTime(path1).compareTo(Files.getLastModifiedTime(path2));
+                    } catch (IOException e) {
+                        log.error("Error comparing file times", e);
+                        return 0;
+                    }
+                });
+        
+        if (mostRecentFile.isPresent()) {
+            String filePath = mostRecentFile.get().toString();
+            log.info("Found most recent CSV file: {}", filePath);
+            return filePath;
+        } else {
+            log.warn("No CSV files found in directory: {}", logsDir);
+            return null;
+        }
+        
+    } catch (IOException e) {
+        log.error("Error accessing logs directory: {}", e.getMessage(), e);
+        return null;
+    }
+}
     public String processExcelToCsv(MultipartFile file) throws IOException {
         String csvFileName = "processed_" + System.currentTimeMillis() + ".csv";
         String csvFilePath = getFilePath(csvFileName);
@@ -159,7 +257,7 @@ public class DataService {
         log.info("CSV file processed successfully: {}", csvFilePath);
         return csvFileName;
     }
-   @Transactional
+  
 public void uploadCsvToDatabase(MultipartFile file) throws IOException {
     log.info("Starting CSV upload process. File: {}, Size: {} bytes", file.getOriginalFilename(), file.getSize());
     
@@ -259,9 +357,20 @@ public void uploadCsvToDatabase(MultipartFile file) throws IOException {
         return studentRepository.findStudentsWithFilters(studentId, className, pageable);
     }
     
-    public List<Student> getAllStudents() {
-        return studentRepository.findAllByOrderByStudentIdAsc();
+   public List<Student> getAllStudents() {
+    // First try to read from CSV file
+    List<Student> studentsFromCsv = getAllStudentsFromCsv();
+    
+    // If CSV file has data, return it
+    if (!studentsFromCsv.isEmpty()) {
+        log.info("Returning {} students from CSV file", studentsFromCsv.size());
+        return studentsFromCsv;
     }
+    
+    // Fallback to database if no CSV data found
+    log.info("No CSV data found, falling back to database");
+    return studentRepository.findAllByOrderByStudentIdAsc();
+}
     
     public List<Student> getStudentsByClass(String className) {
         if (className == null || className.isEmpty()) {
