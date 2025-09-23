@@ -46,7 +46,10 @@ public class DataService {
     private static final String[] CLASS_OPTIONS = {"Class1", "Class2", "Class3", "Class4", "Class5"};
     private static final String WINDOWS_BASE_PATH = "C:\\var\\log\\applications\\API\\dataprocessing\\";
     private static final String LINUX_BASE_PATH = "/var/log/applications/API/dataprocessing/";
-    
+    private static final String LOCAL_BASE_PATH   = "logs/applications/API/dataprocessing/";
+
+
+
     public String generateExcelFile(int recordCount) throws IOException {
         String fileName = "students_" + System.currentTimeMillis() + ".xlsx";
         String filePath = getFilePath(fileName);
@@ -397,15 +400,31 @@ public void uploadCsvToDatabase(MultipartFile file) throws IOException {
         return LocalDate.ofEpochDay(randomDay);
     }
     
-    private String getFilePath(String fileName) {
-        String os = System.getProperty("os.name").toLowerCase();
-        if (os.contains("win")) {
-            return WINDOWS_BASE_PATH + fileName;
-        } else {
-            return LINUX_BASE_PATH + fileName;
+   private String getFilePath(String fileName) {
+    String os = System.getProperty("os.name").toLowerCase();
+
+    Path basePath;
+    if (os.contains("win")) {
+        basePath = Paths.get(WINDOWS_BASE_PATH);
+    } else {
+        basePath = Paths.get(LINUX_BASE_PATH);
+    }
+
+    try {
+        // Try creating system directory
+        Files.createDirectories(basePath);
+    } catch (IOException e) {
+        // Fallback to local logs directory inside project
+        basePath = Paths.get(LOCAL_BASE_PATH);
+        try {
+            Files.createDirectories(basePath);
+        } catch (IOException ex) {
+            throw new RuntimeException("Failed to create local fallback directory: " + basePath, ex);
         }
     }
-    
+
+    return basePath.resolve(fileName).toString();
+}
     private String getCellValueAsString(Cell cell) {
         if (cell == null) return "";
         
