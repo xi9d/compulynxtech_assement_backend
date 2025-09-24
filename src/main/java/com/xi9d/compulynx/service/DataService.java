@@ -357,7 +357,7 @@ public void uploadCsvToDatabase(MultipartFile file) throws IOException {
         return studentRepository.findStudentsWithFilters(studentId, className, pageable);
     }
     
-   public List<Student> getAllStudents() {
+    public List<Student> getAllStudents() {
     // First try to read from CSV file
     List<Student> studentsFromCsv = getAllStudentsFromCsv();
     
@@ -372,12 +372,33 @@ public void uploadCsvToDatabase(MultipartFile file) throws IOException {
     return studentRepository.findAllByOrderByStudentIdAsc();
 }
     
-    public List<Student> getStudentsByClass(String className) {
-        if (className == null || className.isEmpty()) {
-            return getAllStudents();
-        }
-        return studentRepository.findByClassNameOrderByStudentIdAsc(className);
+    public List<Student> getStudentsByClassFromCsv(String className) {
+    List<Student> allStudents = getAllStudentsFromCsv();
+    
+    if (className == null || className.isEmpty()) {
+        return allStudents;
     }
+    
+    return allStudents.stream()
+            .filter(student -> className.equals(student.getClassName()))
+            .sorted((s1, s2) -> Long.compare(s1.getStudentId(), s2.getStudentId()))
+            .collect(java.util.stream.Collectors.toList());
+}
+
+public List<Student> getStudentsByClass(String className) {
+    // Try CSV first
+    List<Student> studentsFromCsv = getStudentsByClassFromCsv(className);
+    
+    if (!studentsFromCsv.isEmpty() || getAllStudentsFromCsv().isEmpty() == false) {
+        return studentsFromCsv;
+    }
+    
+    // Fallback to database
+    if (className == null || className.isEmpty()) {
+        return getAllStudents();
+    }
+    return studentRepository.findByClassNameOrderByStudentIdAsc(className);
+}
     
     public byte[] exportToExcel(List<Student> students) throws IOException {
         try (Workbook workbook = new XSSFWorkbook();
